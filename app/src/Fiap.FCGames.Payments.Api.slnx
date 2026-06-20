@@ -6,4 +6,7 @@
     <Project Path="Fiap.FCGames.Payments.Domain/Fiap.FCGames.Payments.Domain.csproj" />
     <Project Path="Fiap.FCGames.Payments.Infra/Fiap.FCGames.Payments.Infra.csproj" />
   </Folder>
+  <Folder Name="/2.Worker/">
+    <Project Path="Fiap.FCGames.Payments.Worker/Fiap.FCGames.Payments.Worker.csproj" />
+  </Folder>
 </Solution>
