@@ -49,7 +49,6 @@ public class PedidoRealizadoEventoConsumer : IConsumer<PedidoRealizadoEvento>
         };
 
         _uow.PagamentoRepository.Adicionar(pagamento);
-        await _uow.CommitAsync(context.CancellationToken);
 
         await _publishEndpoint.Publish(new PagamentoProcessadoEvento(
             evt.PedidoId,
@@ -63,9 +62,11 @@ public class PedidoRealizadoEventoConsumer : IConsumer<PedidoRealizadoEvento>
             evt.CorrelationId),
             context.CancellationToken);
 
+        await _uow.CommitAsync(context.CancellationToken);
+
         _logger.LogInformation(
             "Pagamento {PedidoId} processado: {Status}. Motivo: {Motivo}",
-            evt.PedidoId, status, motivo ?? "N/A");
+            evt.PedidoId, status.ToString(), motivo ?? "N/A");
     }
 
     private static (StatusPagamento status, string? motivo) AplicarRegra(decimal preco)
