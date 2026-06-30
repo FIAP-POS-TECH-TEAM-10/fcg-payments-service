@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-worker
+  namespace: fcgames
+  labels:
+    app: payments-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments-worker
+  template:
+    metadata:
+      labels:
+        app: payments-worker
+    spec:
+      containers:
+      - name: payments-worker
+        image: fcg-payments-worker:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: ConnectionStrings__DefaultConnection
+          valueFrom:
+            secretKeyRef:
+              name: payments-api-secret
+              key: db-connection
+        - name: RabbitMQ__Host
+          valueFrom:
+            configMapKeyRef:
+              name: payments-api-config
+              key: rabbitmq-host
+        - name: RabbitMQ__Username
+          valueFrom:
+            secretKeyRef:
+              name: payments-api-secret
+              key: rabbitmq-username
+        - name: RabbitMQ__Password
+          valueFrom:
+            secretKeyRef:
+              name: payments-api-secret
+              key: rabbitmq-password
+        volumeMounts:
+        - name: payments-data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: payments-data
+        persistentVolumeClaim:
+          claimName: payments-api-pvc

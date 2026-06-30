@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payments-api-config
+  namespace: fcgames
+data:
+  jwt-issuer: "AppFiapFcGames"
+  rabbitmq-host: "rabbitmq"
+  aspnetcore-urls: "http://+:5003"
