@@ -22,6 +22,11 @@ builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<PedidoRealizadoEventoConsumer>();
 
+    x.AddEntityFrameworkOutbox<FcGamesContexto>(o =>
+    {
+        o.UseSqlite();
+    });
+
     x.UsingRabbitMq((ctx, cfg) =>
     {
         var rabbitHost = builder.Configuration["RabbitMQ:Host"] ?? "localhost";
@@ -40,6 +45,8 @@ builder.Services.AddMassTransit(x =>
                 TimeSpan.FromSeconds(5),
                 TimeSpan.FromSeconds(10),
                 TimeSpan.FromSeconds(30)));
+
+            e.UseEntityFrameworkOutbox<FcGamesContexto>(ctx);
 
             e.ConfigureConsumer<PedidoRealizadoEventoConsumer>(ctx);
         });
