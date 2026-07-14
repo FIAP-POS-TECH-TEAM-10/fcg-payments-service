@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
       - name: payments-api
-        image: fcg-payments-service:latest
-        imagePullPolicy: Never
+        image: fcg-payments-api:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5003
           name: http

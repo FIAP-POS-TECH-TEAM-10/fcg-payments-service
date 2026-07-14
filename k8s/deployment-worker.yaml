@@ -18,7 +18,7 @@ spec:
       containers:
       - name: payments-worker
         image: fcg-payments-worker:latest
-        imagePullPolicy: Never
+        imagePullPolicy: IfNotPresent
         env:
         - name: ConnectionStrings__DefaultConnection
           valueFrom:
