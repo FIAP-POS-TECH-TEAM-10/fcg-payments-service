@@ -5,5 +5,5 @@ metadata:
   namespace: fcgames
 data:
   jwt-issuer: "AppFiapFcGames"
-  rabbitmq-host: "rabbitmq"
+  rabbitmq-host: "fcg-rabbitmq"
   aspnetcore-urls: "http://+:5003"
