@@ -3,6 +3,7 @@ using Fiap.FCGames.Payments.CrossCutting.Middleware;
 using Fiap.FCGames.Payments.Infra.DataProvider.Contexto;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -41,6 +42,13 @@ if (!app.Environment.IsEnvironment("Testing"))
 }
 
 app.UseCorrelationId();
+
+// Middleware para métricas HTTP (latência, status code, etc.)
+app.UseRouting();
+app.UseHttpMetrics();
+
+// Endpoint padrão /metrics
+app.MapMetrics();
 
 if (app.Environment.IsDevelopment())
 {
