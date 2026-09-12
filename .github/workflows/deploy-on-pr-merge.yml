@@ -1,0 +1,115 @@
+name: Infrastructure and App Deploy (Main)
+
+on:
+
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write # Necessário para autenticação via OIDC na AWS
+  contents: read  # Permite checkout do código
+  packages: read  # Permite baixar pacotes privados do GitHub Packages
+
+env:
+  AWS_REGION: sa-east-1
+  ROLE_TO_ASSUME: arn:aws:iam::915153720516:role/GitHubActions-ECS-Deploy-Role
+  ECR_REPOSITORY: fcg-payments-service
+  ECS_CLUSTER: fcg-cluster-fiap
+  ECS_SERVICE: fcg-payments-service
+  CONTAINER_NAME: fcg-payments-service-container
+  WORKING_DIR: ./infra
+
+jobs:
+  # --- ETAPA 1: INFRAESTRUTURA & ECR (APENAS SE O PR FOR MERGED OU PUSH DIRETO) ---
+  infra-and-build:
+    name: Provision Infrastructure & Push to ECR    
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 1. Aplicar Terraform para garantir Cluster EC2 e Repositório ECR
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Terraform Init & Apply
+        run: |
+          cd ${{ env.WORKING_DIR }}
+          terraform init
+          terraform apply -auto-approve
+        env:
+          AWS_EC2_METADATA_DISABLED: "true" # Evita travamento/retry do SDK no runner
+
+      # 2. Build e Push da Imagem Docker no ECR
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Cria um arquivo temporário contendo o token para o Docker montar com segurança
+          echo "${{ secrets.PAT_PACKAGES || secrets.GITHUB_TOKEN }}" > secret_token.txt
+
+          docker build \
+            --platform linux/amd64 \
+            --secret id=GITHUB_TOKEN,src=secret_token.txt \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+
+          rm -f secret_token.txt
+
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  # --- ETAPA 2: DEPLOY NO ECS ---
+  deploy-ecs:
+    name: Deploy Service to ECS
+    needs: infra-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Render ECS Task Definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: .aws/task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}          
+
+      - name: Deploy Amazon ECS Task Definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
