@@ -137,11 +137,18 @@ record PagamentoProcessadoEvento(
 | `JWT__KEY` | Chave de assinatura JWT (mínimo 32 chars) | `MinhaChaveSegredo...` |
 | `JWT__ISSUER` | Issuer validado no token | `AppFiapFcGames` |
 | `ConnectionStrings__DefaultConnection` | Connection string do banco | `Data Source=fcgames-payments.db` |
-| `RabbitMQ__Host` | Host do RabbitMQ | `rabbitmq` |
+| `RabbitMQ__Host` | Host do RabbitMQ (usado se `Messaging__Provider` não for `Sqs`) | `rabbitmq` |
 | `RabbitMQ__Username` | Usuário RabbitMQ | `guest` |
 | `RabbitMQ__Password` | Senha RabbitMQ | `guest` |
+| `Messaging__Provider` | `Sqs` usa Amazon SQS/SNS (deploy AWS). Vazio + `RabbitMQ__Host` → RabbitMQ. Nenhum dos dois → in-memory | `Sqs` |
+| `AWS__Region` | Região usada pelo transporte SQS/SNS quando `Messaging__Provider=Sqs` | `sa-east-1` |
 
 > **Segredos nunca devem estar no `appsettings.json` de produção.** Use env vars ou Kubernetes secrets.
+
+> **Mensageria:** o transporte é escolhido em runtime (`AddMassTransitMessaging` na Api, mesmo padrão
+> inline no `Worker/Program.cs`) — o consumer, o retry policy e o código de aplicação não mudam entre
+> RabbitMQ e SQS. No ECS/AWS, o SDK usa a **Task Role** da task definition
+> (`fcg-payments-service-ecs-task-role`) pra autenticar no SQS/SNS — nenhuma credencial no código.
 
 ---
 
