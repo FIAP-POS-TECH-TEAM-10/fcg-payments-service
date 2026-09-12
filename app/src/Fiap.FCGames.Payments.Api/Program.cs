@@ -2,6 +2,7 @@ using Fiap.FCGames.Payments.CrossCutting.Extensions;
 using Fiap.FCGames.Payments.CrossCutting.Middleware;
 using Fiap.FCGames.Payments.Infra.DataProvider.Contexto;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
