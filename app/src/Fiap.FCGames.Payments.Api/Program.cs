@@ -56,4 +56,10 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live")
+});
+
+
 await app.RunAsync();

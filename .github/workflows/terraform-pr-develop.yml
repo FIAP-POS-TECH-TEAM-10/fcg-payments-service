@@ -1,0 +1,71 @@
+name: Terraform Plan (PR Develop)
+
+on:
+  pull_request:
+    branches:
+      - develop
+    types: [opened, synchronize, reopened]      
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  AWS_REGION: sa-east-1
+  ROLE_TO_ASSUME: arn:aws:iam::915153720516:role/GitHubActions-ECS-Deploy-Role
+  WORKING_DIR: ./infra # Apontado para a pasta infra
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Terraform Init
+        run: terraform init
+        env:
+          AWS_EC2_METADATA_DISABLED: "true" # Resolve a falha do PutObject/S3 no runner        
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -input=false -lock-timeout=1m
+        working-directory: ./infra
+
+      - name: Post Plan Result to PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
+            <details><summary>Visualizar saída do Plan</summary>
+
+            \`\`\`hcl
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
