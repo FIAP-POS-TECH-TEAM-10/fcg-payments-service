@@ -15,12 +15,12 @@ WORKDIR /src/app/src
 # Utiliza o secret montado dinamicamente para autenticar o restore sem expor o token
 RUN --mount=type=secret,id=GITHUB_TOKEN \
     export NUGET_AUTH_TOKEN=$(cat /run/secrets/GITHUB_TOKEN) && \
-    dotnet restore Fiap.FCGames.Users.Api/Fiap.FCGames.Users.Api.csproj    
+    dotnet restore Fiap.FCGames.Payments.Api/Fiap.FCGames.Payments.Api.csproj    
 
 # Compila e publica a aplicação
 RUN --mount=type=secret,id=GITHUB_TOKEN \
     export NUGET_AUTH_TOKEN=$(cat /run/secrets/GITHUB_TOKEN) && \
-    dotnet publish Fiap.FCGames.Users.Api/Fiap.FCGames.Users.Api.csproj -c Release -o /app/publish /p:UseAppHost=false    
+    dotnet publish Fiap.FCGames.Payments.Api/Fiap.FCGames.Payments.Api.csproj -c Release -o /app/publish /p:UseAppHost=false    
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
