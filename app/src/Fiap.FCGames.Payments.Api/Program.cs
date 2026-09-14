@@ -2,6 +2,7 @@ using Fiap.FCGames.Payments.CrossCutting.Extensions;
 using Fiap.FCGames.Payments.CrossCutting.Middleware;
 using Fiap.FCGames.Payments.Infra.DataProvider.Contexto;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,7 +21,7 @@ builder.Services.AddAutenticacaoApi(builder.Configuration);
 builder.Services.AddAutorizacaoApi();
 
 builder.Services.AddContextDatabase(builder.Configuration);
-builder.Services.AddMassTransitRabbitMq(builder.Configuration);
+builder.Services.AddMassTransitMessaging(builder.Configuration);
 
 builder.Services.AddHealthChecks();
 
@@ -55,5 +56,11 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live")
+});
+
 
 await app.RunAsync();
