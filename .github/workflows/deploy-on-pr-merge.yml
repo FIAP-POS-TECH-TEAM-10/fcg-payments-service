@@ -19,7 +19,7 @@ env:
   AWS_REGION: sa-east-1
   ROLE_TO_ASSUME: arn:aws:iam::915153720516:role/GitHubActions-ECS-Deploy-Role
   ECR_REPOSITORY: fcg-payments-service
-  ECS_CLUSTER: fcg-cluster-fiap
+  ECS_CLUSTER: fcg-payments-cluster # cluster dedicado -- ver comentário em infra/variables.tf
   ECS_SERVICE: fcg-payments-service
   CONTAINER_NAME: fcg-payments-service-container
   WORKING_DIR: ./infra
