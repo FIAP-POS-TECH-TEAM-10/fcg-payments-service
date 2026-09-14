@@ -89,6 +89,68 @@ resource "aws_iam_instance_profile" "ecs_instance_profile" {
 }
 
 # ------------------------------------------------------------------------------
+# 2b. TASK ROLE — usada pelo CONTAINER (não pela instância EC2) para falar com o
+#     Amazon SQS/SNS via MassTransit (Messaging:Provider=Sqs). No launch type EC2 o
+#     agente injeta AWS_CONTAINER_CREDENTIALS_RELATIVE_URI no container quando a task
+#     tem taskRoleArn, e o AWS SDK usa isso automaticamente (sem access key no código).
+# ------------------------------------------------------------------------------
+resource "aws_iam_role" "ecs_task_role" {
+  name = "${var.service_name}-ecs-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+# MassTransit auto-provisiona (cria) os tópicos SNS e filas SQS na primeira conexão —
+# por isso a policy cobre Create/Get/Set além de enviar/receber. Escopo: só recursos
+# SQS/SNS da própria conta+região (não IAM, não outros serviços).
+resource "aws_iam_role_policy" "ecs_task_sqs_sns" {
+  name = "${var.service_name}-task-sqs-sns"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Sqs"
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes",
+          "sqs:TagQueue", "sqs:ListQueueTags", "sqs:SendMessage", "sqs:ReceiveMessage",
+          "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:PurgeQueue"
+        ]
+        Resource = "arn:aws:sqs:${var.aws_region}:*:*"
+      },
+      {
+        Sid    = "Sns"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes", "sns:TagResource",
+          "sns:Subscribe", "sns:Unsubscribe", "sns:ListSubscriptionsByTopic", "sns:Publish"
+        ]
+        Resource = "arn:aws:sns:${var.aws_region}:*:*"
+      },
+      {
+        # sqs:ListQueues e sns:ListTopics não aceitam restrição por ARN de recurso —
+        # a AWS exige Resource "*" para essas duas ações (mesmo escopadas só a elas).
+        # Sem isso o MassTransit falha (silenciosamente, só loga erro) ao publicar, porque
+        # ele chama ListTopics pra checar se o tópico já existe antes de tentar criar.
+        Sid      = "ListNoResourceLevelPerms"
+        Effect   = "Allow"
+        Action   = ["sqs:ListQueues", "sns:ListTopics"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ------------------------------------------------------------------------------
 # 3. CLUSTER ECS + LAUNCH TEMPLATE + AUTO SCALING GROUP
 # ------------------------------------------------------------------------------
 
@@ -157,6 +219,7 @@ resource "aws_ecs_task_definition" "app" {
   requires_compatibilities = ["EC2"]
   cpu                      = "256"
   memory                   = "256"
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -174,9 +237,11 @@ resource "aws_ecs_task_definition" "app" {
       ]
       # VARIÁVEIS DE AMBIENTE PARA DIAGNÓSTICO DO .NET NO LINUX
       environment = [
-        { name = "ASPNETCORE_ENVIRONMENT", value = "Development" }, # Revela mais logs no startup
+        { name = "ASPNETCORE_ENVIRONMENT", value = "Development" },      # Revela mais logs no startup
         { name = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", value = "1" }, # Evita crash por falta de ICU/locales no Linux
-        { name = "DOTNET_USE_POLLING_FILE_WATCHER", value = "true" }
+        { name = "DOTNET_USE_POLLING_FILE_WATCHER", value = "true" },
+        { name = "Messaging__Provider", value = "Sqs" }, # MassTransit usa Amazon SQS/SNS (ver MassTransitExtensions.cs / Worker/Program.cs)
+        { name = "AWS__Region", value = var.aws_region }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -200,11 +265,11 @@ resource "aws_ecs_service" "main" {
 
   # Permite que a capacidade caia para 0 durante o deploy para liberar a porta fixa
   deployment_minimum_healthy_percent = 0
-  deployment_maximum_percent         = 100  
+  deployment_maximum_percent         = 100
 
   lifecycle {
     ignore_changes = [
       task_definition # Garante que o Terraform nao reverta as revisoes criadas pelo GitHub Actions
     ]
-  }  
+  }
 }
