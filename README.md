@@ -1,5 +1,6 @@
 # fcg-payments-api
 
+
 Microsserviço de pagamentos do projeto FCGames — Tech Challenge FIAP Fase 2.
 
 Responsável por processar pedidos de compra, simular aprovação/rejeição e notificar os demais serviços via RabbitMQ.
