@@ -58,7 +58,7 @@ Consulta o status de um pagamento pelo ID do pedido.
 
 ### `GET /health` — sem auth
 
-Usado pelo Kubernetes para liveness/readiness probe.
+Liveness/readiness probe usado pelo orquestrador (ECS na AWS / Kubernetes localmente).
 
 **Response 200:**
 ```json
