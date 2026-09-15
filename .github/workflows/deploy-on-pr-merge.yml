@@ -22,6 +22,7 @@ env:
   ECS_CLUSTER: fcg-payments-cluster # cluster dedicado -- ver comentário em infra/variables.tf
   ECS_SERVICE: fcg-payments-service
   CONTAINER_NAME: fcg-payments-service-container
+  WORKER_CONTAINER_NAME: fcg-payments-service-worker
   WORKING_DIR: ./infra
 
 jobs:
@@ -58,7 +59,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and Push Docker Image
+      - name: Build and Push Docker Images (Api + Worker)
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -73,10 +74,21 @@ jobs:
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
 
+          # Worker (consumer MassTransit) — projeto/imagem separados, mesmo repo ECR,
+          # tag com prefixo "worker-" pra não colidir com a imagem da API.
+          docker build \
+            --platform linux/amd64 \
+            --secret id=GITHUB_TOKEN,src=secret_token.txt \
+            -f Dockerfile.worker \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:worker-$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:worker-latest .
+
           rm -f secret_token.txt
 
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:worker-$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:worker-latest
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
   # --- ETAPA 2: DEPLOY NO ECS ---
@@ -98,18 +110,26 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Render ECS Task Definition
+      - name: Render ECS Task Definition (Api)
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: .aws/task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}          
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Render ECS Task Definition (Worker)
+        id: task-def-worker
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          container-name: ${{ env.WORKER_CONTAINER_NAME }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:worker-${{ github.sha }}
 
       - name: Deploy Amazon ECS Task Definition
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          task-definition: ${{ steps.task-def-worker.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true

@@ -1,16 +1,20 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-ARG NUGET_AUTH_TOKEN
-ENV NUGET_AUTH_TOKEN=$NUGET_AUTH_TOKEN
-
 COPY nuget.config .
 COPY app/src/ app/src/
 
 WORKDIR /src/app/src
-RUN dotnet restore Fiap.FCGames.Payments.Worker/Fiap.FCGames.Payments.Worker.csproj
 
-RUN dotnet publish Fiap.FCGames.Payments.Worker/Fiap.FCGames.Payments.Worker.csproj \
+# Utiliza o secret montado dinamicamente para autenticar o restore sem expor o token
+# na imagem (um ARG/ENV fica visível em `docker history`, mesmo em builds privados).
+RUN --mount=type=secret,id=GITHUB_TOKEN \
+    export NUGET_AUTH_TOKEN=$(cat /run/secrets/GITHUB_TOKEN) && \
+    dotnet restore Fiap.FCGames.Payments.Worker/Fiap.FCGames.Payments.Worker.csproj
+
+RUN --mount=type=secret,id=GITHUB_TOKEN \
+    export NUGET_AUTH_TOKEN=$(cat /run/secrets/GITHUB_TOKEN) && \
+    dotnet publish Fiap.FCGames.Payments.Worker/Fiap.FCGames.Payments.Worker.csproj \
     -c Release \
     -o /app/publish \
     --no-restore
