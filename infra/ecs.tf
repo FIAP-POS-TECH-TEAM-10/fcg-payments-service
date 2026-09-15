@@ -217,9 +217,17 @@ resource "aws_ecs_task_definition" "app" {
   family                   = "${var.service_name}-task"
   network_mode             = "bridge"
   requires_compatibilities = ["EC2"]
-  cpu                      = "256"
-  memory                   = "256"
+  cpu                      = "512"
+  memory                   = "512"
   task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  # Compartilhado entre o container da API e o do Worker (consumer MassTransit) — os
+  # dois usam o MESMO arquivo SQLite (payments-db: Pagamentos), senão o Worker gravaria
+  # num banco separado e a API nunca veria as mudanças. Sem host_path: cada task recebe
+  # um volume Docker "fresco", coerente com o SQLite já sendo efêmero neste projeto.
+  volume {
+    name = "${var.service_name}-data"
+  }
 
   container_definitions = jsonencode([
     {
@@ -235,8 +243,24 @@ resource "aws_ecs_task_definition" "app" {
           protocol      = "tcp"
         }
       ]
+      mountPoints = [
+        {
+          sourceVolume  = "${var.service_name}-data"
+          containerPath = "/data"
+        }
+      ]
+      # Usado pelo Worker (dependsOn condition=HEALTHY) pra só migrar/consumir depois
+      # que a API já criou o schema, evitando corrida no primeiro CREATE TABLE do SQLite.
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:5003/health || exit 1"]
+        interval    = 10
+        timeout     = 5
+        retries     = 5
+        startPeriod = 30
+      }
       # VARIÁVEIS DE AMBIENTE PARA DIAGNÓSTICO DO .NET NO LINUX
       environment = [
+        { name = "ConnectionStrings__DefaultConnection", value = "Data Source=/data/payments.db" },
         { name = "ASPNETCORE_ENVIRONMENT", value = "Development" },      # Revela mais logs no startup
         { name = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", value = "1" }, # Evita crash por falta de ICU/locales no Linux
         { name = "DOTNET_USE_POLLING_FILE_WATCHER", value = "true" },
@@ -249,6 +273,42 @@ resource "aws_ecs_task_definition" "app" {
           "awslogs-group"         = aws_cloudwatch_log_group.ecs_logs.name
           "awslogs-region"        = var.aws_region
           "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    },
+    {
+      # Consumer MassTransit (PedidoRealizadoEvento) — projeto separado
+      # (Fiap.FCGames.Payments.Worker), imagem própria (tag worker-latest no mesmo
+      # ECR). Sem porta exposta: não recebe tráfego HTTP, não passa pelo API Gateway.
+      name      = "${var.service_name}-worker"
+      image     = "${aws_ecr_repository.app_repo.repository_url}:worker-latest"
+      cpu       = 128
+      memory    = 128
+      essential = false
+      dependsOn = [
+        {
+          containerName = "${var.service_name}-container"
+          condition     = "HEALTHY"
+        }
+      ]
+      mountPoints = [
+        {
+          sourceVolume  = "${var.service_name}-data"
+          containerPath = "/data"
+        }
+      ]
+      environment = [
+        { name = "ConnectionStrings__DefaultConnection", value = "Data Source=/data/payments.db" },
+        { name = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", value = "1" },
+        { name = "Messaging__Provider", value = "Sqs" },
+        { name = "AWS__Region", value = var.aws_region }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.ecs_logs.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "worker"
         }
       }
     }
