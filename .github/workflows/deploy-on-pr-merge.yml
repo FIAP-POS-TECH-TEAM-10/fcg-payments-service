@@ -1,14 +1,10 @@
 name: Infrastructure and App Deploy (Main)
 
+# DESATIVADO (Fase 4): o ECS foi removido — o serviço roda no EKS (fcg-orchestration/k8s/eks).
+# Rodar este workflow agora recriaria só o ECR e falharia no deploy ECS. O pipeline novo
+# (build → ECR → rollout no EKS) chega na parte 3; até lá, só disparo manual.
 on:
-
-  pull_request:
-    branches:
-      - main
-    types: [opened, synchronize, reopened]
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   id-token: write # Necessário para autenticação via OIDC na AWS
