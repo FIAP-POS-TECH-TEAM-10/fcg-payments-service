@@ -242,3 +242,18 @@ fcg-payments-api/
 - [x] `nuget.config` (GitHub Packages)
 - [ ] Dockerfile multi-stage (API + Worker)
 - [ ] Manifests Kubernetes (`/k8s/`)
+
+## Pipeline (CI/CD)
+
+`.github/workflows/ci-cd.yml` (GitHub Actions):
+
+| Gatilho | Jobs |
+|---|---|
+| Pull request → `main` | Build & testes → imagens Docker (API + worker) + **Trivy** (CRITICAL/HIGH, só reporta) |
+| Push na `main` / botão "Run workflow" | o mesmo + **push no ECR** (`:<sha7>`, `:latest`, `:worker-<sha7>`, `:worker-latest`) + **deploy no EKS** |
+
+- **Deploy:** `kubectl set image deploy/payments-api api=<ECR>:<sha7> worker=<ECR>:worker-<sha7>` + `kubectl rollout status` — API e worker ficam no mesmo pod (SQLite compartilhado); rolling update sem downtime.
+- **Cluster desligado** (o `fcg-eks` só fica ligado nas sessões): o deploy é pulado com aviso e o run fica verde; as imagens `:latest`/`:worker-latest` entram no próximo `./scripts/eks-up.sh`.
+- **Trivy:** tabela no resumo do run e alertas na aba **Security → Code scanning** (categorias `trivy-api` e `trivy-worker`).
+- **Testes:** `dotnet test` roda quando existir um projeto `*Tests.csproj`; hoje o pipeline emite um aviso (pendência — a regra de aprovação é a candidata natural ao primeiro teste).
+- **Autenticação:** OIDC com a role `GitHubActions-ECS-Deploy-Role` (sem chave AWS no GitHub). Secret necessário: `PAT_PACKAGES` (`read:packages`).
