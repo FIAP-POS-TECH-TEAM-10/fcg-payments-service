@@ -250,7 +250,7 @@ fcg-payments-api/
 | Gatilho | Jobs |
 |---|---|
 | Pull request → `main` | Build & testes → imagens Docker (API + worker) + **Trivy** (CRITICAL/HIGH, só reporta) |
-| Push na `main` / botão "Run workflow" | o mesmo + **push no ECR** (`:<sha7>`, `:latest`, `:worker-<sha7>`, `:worker-latest`) + **deploy no EKS** |
+| Push na `main` / botão "Run workflow" na `main` | o mesmo + **push no ECR** (`:<sha7>`, `:latest`, `:worker-<sha7>`, `:worker-latest`) + **deploy no EKS** |
 
 - **Deploy:** `kubectl set image deploy/payments-api api=<ECR>:<sha7> worker=<ECR>:worker-<sha7>` + `kubectl rollout status` — API e worker ficam no mesmo pod (SQLite compartilhado); rolling update sem downtime.
 - **Cluster desligado** (o `fcg-eks` só fica ligado nas sessões): o deploy é pulado com aviso e o run fica verde; as imagens `:latest`/`:worker-latest` entram no próximo `./scripts/eks-up.sh`.

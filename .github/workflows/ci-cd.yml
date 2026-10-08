@@ -1,6 +1,7 @@
 # Pipeline do PaymentsAPI (Fase 4): build → testes → imagens (API + worker) + Trivy → ECR → rolling update no EKS.
 #   pull_request → build, testes, imagens e Trivy (não publica nada)
-#   push na main / manual → + push no ECR (:<sha>, :latest, :worker-<sha>, :worker-latest) + deploy no EKS
+#   push na main / manual na main → + push no ECR (:<sha>, :latest, :worker-<sha>, :worker-latest) + deploy no EKS
+#   manual em outra branch → só build, testes, imagem e Trivy (não mexe em :latest nem em produção)
 # Cluster fcg-eks desligado (liga/desliga por sessão) → deploy pulado com aviso, run verde;
 # as imagens :latest / :worker-latest entram no próximo ./scripts/eks-up.sh (fcg-orchestration).
 name: CI/CD
@@ -36,6 +37,7 @@ jobs:
   build-test:
     name: Build & testes
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -64,6 +66,7 @@ jobs:
     name: Imagens + Trivy + ECR
     needs: build-test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
@@ -111,30 +114,34 @@ jobs:
           done
 
       - name: Trivy (API) → aba Security
+        if: ${{ !cancelled() }}
+        continue-on-error: true # Trivy só reporta; PR de fork tem token só-leitura e o upload falharia
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy/api.sarif
           category: trivy-api
 
       - name: Trivy (worker) → aba Security
+        if: ${{ !cancelled() }}
+        continue-on-error: true # Trivy só reporta; PR de fork tem token só-leitura e o upload falharia
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy/worker.sarif
           category: trivy-worker
 
       - name: Login na AWS (OIDC)
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login no ECR
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Push para o ECR
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
@@ -146,8 +153,9 @@ jobs:
   deploy:
     name: Deploy no EKS (rolling update)
     needs: image
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Login na AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
