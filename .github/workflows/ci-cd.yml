@@ -1,0 +1,203 @@
+# Pipeline do PaymentsAPI (Fase 4): build → testes → imagens (API + worker) + Trivy → ECR → rolling update no EKS.
+#   pull_request → build, testes, imagens e Trivy (não publica nada)
+#   push na main / manual na main → + push no ECR (:<sha>, :latest, :worker-<sha>, :worker-latest) + deploy no EKS
+#   manual em outra branch → só build, testes, imagem e Trivy (não mexe em :latest nem em produção)
+# Cluster fcg-eks desligado (liga/desliga por sessão) → deploy pulado com aviso, run verde;
+# as imagens :latest / :worker-latest entram no próximo ./scripts/eks-up.sh (fcg-orchestration).
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Na main os deploys entram em fila (nunca cancela um rollout no meio); em PR, push novo cancela o anterior.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  id-token: write        # OIDC com a AWS (sem access key)
+  contents: read
+  security-events: write # SARIF do Trivy na aba Security
+
+env:
+  AWS_REGION: sa-east-1
+  ROLE_TO_ASSUME: arn:aws:iam::915153720516:role/GitHubActions-ECS-Deploy-Role
+  REGISTRY: 915153720516.dkr.ecr.sa-east-1.amazonaws.com
+  ECR_REPOSITORY: fcg-payments-service
+  EKS_CLUSTER: fcg-eks
+  K8S_NAMESPACE: fcgames
+  DEPLOYMENT: payments-api
+  SOLUTION: app/src/Fiap.FCGames.Payments.Api.slnx
+
+jobs:
+  build-test:
+    name: Build & testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore (pacote privado FCGames.IntegrationEvents)
+        run: dotnet restore "$SOLUTION"
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.PAT_PACKAGES }}
+
+      - name: Build
+        run: dotnet build "$SOLUTION" --no-restore -c Release
+
+      - name: Testes unitários
+        run: |
+          if find . -name '*Tests.csproj' -not -path '*/bin/*' -not -path '*/obj/*' | grep -q .; then
+            dotnet test "$SOLUTION" --no-build -c Release
+          else
+            echo "::warning::Nenhum projeto de teste (*Tests.csproj) encontrado — pendência da Fase 4: testes unitários."
+            echo "⚠️ Nenhum projeto de teste encontrado — pendência: testes unitários." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  image:
+    name: Imagens + Trivy + ECR
+    needs: build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag das imagens
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build das imagens (API + worker)
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.PAT_PACKAGES }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          docker build --platform linux/amd64 \
+            --secret id=GITHUB_TOKEN,env=NUGET_AUTH_TOKEN \
+            -t "$REGISTRY/$ECR_REPOSITORY:$TAG" \
+            -t "$REGISTRY/$ECR_REPOSITORY:latest" .
+          docker build --platform linux/amd64 \
+            --secret id=GITHUB_TOKEN,env=NUGET_AUTH_TOKEN \
+            -f Dockerfile.worker \
+            -t "$REGISTRY/$ECR_REPOSITORY:worker-$TAG" \
+            -t "$REGISTRY/$ECR_REPOSITORY:worker-latest" .
+
+      - name: Trivy (CRITICAL/HIGH — só reporta, não bloqueia)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p trivy
+          trivy() {
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v trivy-cache:/root/.cache -v "$PWD/trivy:/out" \
+              aquasec/trivy:latest image --quiet --severity CRITICAL,HIGH --exit-code 0 "$@"
+          }
+          for kind in api worker; do
+            if [ "$kind" = api ]; then img="$REGISTRY/$ECR_REPOSITORY:$TAG"; else img="$REGISTRY/$ECR_REPOSITORY:worker-$TAG"; fi
+            trivy --format sarif --output "/out/$kind.sarif" "$img"
+            trivy --format table "$img" > "trivy/$kind.txt"
+            {
+              echo "### 🔎 Trivy — \`$img\` (CRITICAL/HIGH)"
+              echo '```'
+              head -c 30000 "trivy/$kind.txt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Trivy (API) → aba Security
+        if: ${{ !cancelled() }}
+        continue-on-error: true # Trivy só reporta; PR de fork tem token só-leitura e o upload falharia
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy/api.sarif
+          category: trivy-api
+
+      - name: Trivy (worker) → aba Security
+        if: ${{ !cancelled() }}
+        continue-on-error: true # Trivy só reporta; PR de fork tem token só-leitura e o upload falharia
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy/worker.sarif
+          category: trivy-worker
+
+      - name: Login na AWS (OIDC)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login no ECR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push para o ECR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          for t in "$TAG" latest "worker-$TAG" worker-latest; do
+            docker push "$REGISTRY/$ECR_REPOSITORY:$t"
+          done
+          echo "📦 Publicado: \`$REGISTRY/$ECR_REPOSITORY:$TAG\` e \`:worker-$TAG\` (+ \`latest\`)" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy no EKS (rolling update)
+    needs: image
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Login na AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cluster ligado?
+        id: cluster
+        run: |
+          if status=$(aws eks describe-cluster --name "$EKS_CLUSTER" --query cluster.status --output text 2>err.txt); then
+            if [ "$status" = "ACTIVE" ]; then
+              echo "up=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "up=false" >> "$GITHUB_OUTPUT"
+              echo "### ⏭️ Deploy pulado: cluster \`$EKS_CLUSTER\` está $status" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif grep -q ResourceNotFoundException err.txt; then
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### ⏭️ Deploy pulado: cluster \`$EKS_CLUSTER\` desligado"
+              echo "As imagens \`:${{ needs.image.outputs.tag }}\` (e \`:latest\`/\`:worker-latest\`) já estão no ECR e entram no próximo \`./scripts/eks-up.sh\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat err.txt
+            exit 1
+          fi
+
+      - name: Rolling update (API + worker no mesmo pod)
+        if: steps.cluster.outputs.up == 'true'
+        env:
+          TAG: ${{ needs.image.outputs.tag }}
+        run: |
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+          kubectl set image "deploy/$DEPLOYMENT" -n "$K8S_NAMESPACE" \
+            api="$REGISTRY/$ECR_REPOSITORY:$TAG" \
+            worker="$REGISTRY/$ECR_REPOSITORY:worker-$TAG"
+          kubectl rollout status "deploy/$DEPLOYMENT" -n "$K8S_NAMESPACE" --timeout=600s
+          {
+            echo "### ✅ Deploy concluído (rolling update, sem downtime)"
+            echo "Imagens: \`:$TAG\` (api) e \`:worker-$TAG\` (worker)"
+            echo '```'
+            kubectl get pods -n "$K8S_NAMESPACE" -l app="$DEPLOYMENT" -o wide
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

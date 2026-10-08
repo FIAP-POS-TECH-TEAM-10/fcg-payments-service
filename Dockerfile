@@ -1,12 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Recebe o token enviado pelo GitHub Actions durante o build
-ARG GITHUB_TOKEN
-
-# Configura as variáveis de ambiente que o nuget.config utiliza
-ENV NUGET_AUTH_TOKEN=${GITHUB_TOKEN}
-
 COPY nuget.config .
 COPY app/src/ app/src/
 
