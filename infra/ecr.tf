@@ -12,7 +12,8 @@ resource "aws_ecr_repository" "app_repo" {
   }
 }
 
-# Mantém apenas as últimas 5 imagens para economizar espaço de armazenamento
+# Mantém as últimas 10 imagens (API + worker contam juntas). A regra antiga
+# (sinceImagePushed 5 dias) apagava TUDO quando ninguém fazia push por 5 dias.
 resource "aws_ecr_lifecycle_policy" "app_repo_policy" {
   repository = aws_ecr_repository.app_repo.name
 
@@ -20,12 +21,11 @@ resource "aws_ecr_lifecycle_policy" "app_repo_policy" {
     rules = [
       {
         rulePriority = 1
-        description  = "Manter apenas as últimas 5 imagens"
+        description  = "Manter apenas as ultimas 10 imagens"
         selection = {
           tagStatus   = "any"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 5
+          countType   = "imageCountMoreThan"
+          countNumber = 10
         }
         action = {
           type = "expire"
