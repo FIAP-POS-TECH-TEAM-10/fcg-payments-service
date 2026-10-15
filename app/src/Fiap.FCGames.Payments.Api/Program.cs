@@ -1,11 +1,14 @@
 using Fiap.FCGames.Payments.CrossCutting.Extensions;
 using Fiap.FCGames.Payments.CrossCutting.Middleware;
+using Fiap.FCGames.Payments.CrossCutting.Services;
 using Fiap.FCGames.Payments.Infra.DataProvider.Contexto;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.EntityFrameworkCore;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddAwsSecretsManager(builder.Configuration);
 
 builder.Services.AddControllers();
 builder.Services.Configure<Microsoft.AspNetCore.Mvc.ApiBehaviorOptions>(options =>
@@ -33,6 +36,28 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 var app = builder.Build();
+
+//TESTA A CONEXÃO COM O SECRETS MANAGER DA AWS
+try
+{
+    var secretsService =
+        app.Services.GetRequiredService<SecretsManagerService>();
+
+    var secret = await secretsService.GetSecretAsync();
+
+    if (string.IsNullOrWhiteSpace(secret))
+    {
+        throw new InvalidOperationException("O segredo está vazio.");
+    }
+
+    app.Logger.LogInformation(
+        "Sucesso! O segredo foi recuperado da AWS.");
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Falha ao acessar o segredo da AWS.");
+    throw;
+}
 
 if (!app.Environment.IsEnvironment("Testing"))
 {

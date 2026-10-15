@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.SecretsManager" Version="4.0.100.19" />
     <PackageReference Include="FCGames.IntegrationEvents" Version="1.0.0-preview.2" />
     <PackageReference Include="MassTransit.AmazonSQS" Version="8.4.1" />
     <PackageReference Include="MassTransit.RabbitMQ" Version="8.4.1" />
