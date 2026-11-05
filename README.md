@@ -135,7 +135,7 @@ record PagamentoProcessadoEvento(
 
 | Variável | Descrição | Exemplo |
 |----------|-----------|---------|
-| `JWT__KEY` | Chave de assinatura JWT (mínimo 32 chars) | `MinhaChaveSegredo...` |
+| `JWT__KEY` | Chave de assinatura JWT (mínimo 32 chars) | `<chave com 32+ caracteres>` |
 | `JWT__ISSUER` | Issuer validado no token | `AppFiapFcGames` |
 | `ConnectionStrings__DefaultConnection` | Connection string do banco | `Data Source=fcgames-payments.db` |
 | `RabbitMQ__Host` | Host do RabbitMQ (usado se `Messaging__Provider` não for `Sqs`) | `rabbitmq` |
