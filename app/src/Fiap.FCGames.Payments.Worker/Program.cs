@@ -54,8 +54,8 @@ builder.Services.AddMassTransit(x =>
     {
         x.UsingRabbitMq((ctx, cfg) =>
         {
-            var username = builder.Configuration["RabbitMQ:Username"] ?? "guest";
-            var password = builder.Configuration["RabbitMQ:Password"] ?? "guest";
+            var username = builder.Configuration["RabbitMQ:Username"] ?? throw new InvalidOperationException("Configuração RabbitMQ:Username não encontrada. Defina a env var RABBITMQ__USERNAME.");
+            var password = builder.Configuration["RabbitMQ:Password"] ?? throw new InvalidOperationException("Configuração RabbitMQ:Password não encontrada. Defina a env var RABBITMQ__PASSWORD.");
 
             cfg.Host(rabbitHost, "/", h =>
             {

@@ -39,8 +39,8 @@ public static class MassTransitExtensions
             {
                 x.UsingRabbitMq((_, cfg) =>
                 {
-                    var username = configuration["RabbitMQ:Username"] ?? "guest";
-                    var password = configuration["RabbitMQ:Password"] ?? "guest";
+                    var username = configuration["RabbitMQ:Username"] ?? throw new InvalidOperationException("Configuração RabbitMQ:Username não encontrada. Defina a env var RABBITMQ__USERNAME.");
+                    var password = configuration["RabbitMQ:Password"] ?? throw new InvalidOperationException("Configuração RabbitMQ:Password não encontrada. Defina a env var RABBITMQ__PASSWORD.");
 
                     cfg.Host(rabbitHost, "/", h =>
                     {

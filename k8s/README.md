@@ -56,6 +56,16 @@ kubectl logs -n fcgames -l app=payments-worker -f
 
 **IMPORTANTE**: Altere os valores dos Secrets em produção!
 
+O `secret.yaml` versionado é só um **modelo** (valores `REPLACE_ME`). Crie o Secret real com as suas credenciais:
+
+```bash
+kubectl create secret generic payments-api-secret -n fcgames \
+  --from-literal=jwt-key="$JWT__KEY" \
+  --from-literal=db-connection="Data Source=/data/payments.db" \
+  --from-literal=rabbitmq-username="$RABBITMQ__USERNAME" \
+  --from-literal=rabbitmq-password="$RABBITMQ__PASSWORD"
+```
+
 ## Acesso
 
 ### Port Forward para acesso local
