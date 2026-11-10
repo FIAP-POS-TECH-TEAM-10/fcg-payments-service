@@ -1,262 +1,78 @@
-# fcg-payments-api
+# fcg-payments-service (PaymentsAPI + Worker)
 
-
-Microsserviço de pagamentos do projeto FCGames — Tech Challenge FIAP Fase 2.
-
-Responsável por processar pedidos de compra, simular aprovação/rejeição e notificar os demais serviços via RabbitMQ.
-
----
-
-## Arquitetura
-
-```
-Fiap.FCGames.Payments.Api      — HTTP :5003  (consulta de pagamentos + health)
-Fiap.FCGames.Payments.Worker   — Worker Service (consumer RabbitMQ)
-Fiap.FCGames.Payments.Domain   — Entidade Pagamento + enum StatusPagamento
-Fiap.FCGames.Payments.Infra    — EF Core, PagamentoRepository, migrations
-Fiap.FCGames.Payments.Application — Query BuscarPagamento (CQRS/MediatR)
-Fiap.FCGames.Payments.CrossCutting — JWT, Swagger, Serilog, MassTransit extensions
-```
-
-### Fluxo de mensagens
-
-```
-CatalogAPI
-  └── publica PedidoRealizadoEvento
-        └── [fila: payments-pedido-realizado]
-              └── Payments.Worker consome
-                    ├── verifica idempotência por PedidoId
-                    ├── aplica regra de aprovação
-                    ├── persiste Pagamento no payments-db
-                    └── publica PagamentoProcessadoEvento
-                          ├── CatalogAPI: atualiza Pedido + Biblioteca
-                          └── NotificationsAPI: log de confirmação/rejeição
-```
-
----
+Simula o pagamento dos pedidos. O worker consome `PedidoRealizadoEvento`, decide aprovado ou
+rejeitado, grava o pagamento e publica `PagamentoProcessadoEvento`. A API só consulta.
 
 ## Endpoints
 
-### `GET /pagamentos/{orderId}` — [Authorize]
+| Endpoint | Acesso | O que faz |
+|---|---|---|
+| `GET /pagamentos/{orderId}` | autenticado | status do pagamento do pedido (`Aprovado`/`Rejeitado`, motivo, valor) |
+| `GET /health` · `GET /health/live` | anônimo | health checks |
 
-Consulta o status de um pagamento pelo ID do pedido.
+## Regra de aprovação (determinística, para a demo)
 
-**Response 200:**
-```json
-{
-  "orderId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "valor": 49.90,
-  "status": "Aprovado",
-  "motivo": null,
-  "processadoEm": "2026-06-21T10:00:05Z"
-}
-```
+| Preço | Status | Motivo |
+|---|---|---|
+| ≤ 0 | Rejeitado | `Valor inválido` |
+| > 100 | Rejeitado | `Limite de crédito excedido` |
+| demais | Aprovado | — |
 
-**Response 404:** pagamento não encontrado para o `orderId` informado.
-
----
-
-### `GET /health` — sem auth
-
-Liveness/readiness probe usado pelo orquestrador (ECS na AWS / Kubernetes localmente).
-
-**Response 200:**
-```json
-{ "status": "Healthy" }
-```
-
----
-
-## Regra de Aprovação
-
-A simulação é determinística para facilitar a demonstração em vídeo:
-
-| Condição | Status | Motivo |
-|----------|--------|--------|
-| Preço ≤ 0 | Rejeitado | `"Valor inválido"` |
-| Preço > R$ 100 | Rejeitado | `"Limite de crédito excedido"` |
-| Demais | Aprovado | `null` |
-
-**Jogos de exemplo para a demo:**
-- Hades II — R$ 49,90 → **Aprovado**
-- Cyberpunk 2077 — R$ 149,90 → **Rejeitado**
-
----
-
-## Banco de Dados
-
-**payments-db** (SQLite em dev / PostgreSQL em prod):
-
-```sql
-CREATE TABLE Pagamentos (
-    Id           TEXT PRIMARY KEY,
-    PedidoId     TEXT NOT NULL UNIQUE,  -- chave de idempotência
-    UsuarioId    TEXT NOT NULL,
-    JogoId       TEXT NOT NULL,
-    Valor        REAL NOT NULL,
-    Status       INTEGER NOT NULL,      -- 0=Pendente, 1=Aprovado, 2=Rejeitado
-    Motivo       TEXT,
-    ProcessadoEm TEXT NOT NULL
-);
-```
-
-A migration é aplicada automaticamente no startup de ambos os projetos (API e Worker).
-
----
+Com o seed do catalog: Hades (R$ 49,90) é aprovado; Cyberpunk 2077 (R$ 149,90) é rejeitado.
 
 ## Eventos
 
-### Consome
+| Evento | Papel | Fila | O que acontece |
+|---|---|---|---|
+| `PedidoRealizadoEvento` | consome (worker) | `payments-pedido-realizado` | aplica a regra, grava `Pagamento`, publica o resultado; pedido já processado é ignorado (idempotência por `PedidoId`) |
+| `PagamentoProcessadoEvento` | publica (worker) | — | consumido pelo catalog e pelas notificações |
 
-**`PedidoRealizadoEvento`** — publicado pelo CatalogAPI
-```csharp
-record PedidoRealizadoEvento(
-    Guid PedidoId, Guid UsuarioId, Guid JogoId, string NomeJogo,
-    decimal Preco, DateTime RealizadoEmUtc, Guid CorrelationId);
-```
+Falha no consumer: 3 novas tentativas (5 s, 10 s, 30 s). Contratos:
+[`fcg-integration-events`](https://github.com/FIAP-POS-TECH-TEAM-10/fcg-integration-events).
 
-Fila: `payments-pedido-realizado`
-Retry: 3 tentativas — 5s / 10s / 30s
+## Dados
 
-### Publica
+SQLite com a tabela `Pagamentos` (`PedidoId` único). API e worker usam o mesmo arquivo.
 
-**`PagamentoProcessadoEvento`** — consumido por CatalogAPI e NotificationsAPI
-```csharp
-record PagamentoProcessadoEvento(
-    Guid PedidoId, Guid UsuarioId, Guid JogoId, string NomeJogo,
-    decimal Preco, string Status, string? Motivo,
-    DateTime ProcessadoEmUtc, Guid CorrelationId);
-// Status: "Aprovado" | "Rejeitado"
-```
+## Variáveis de ambiente
 
----
+| Variável | Obrigatória | O que é |
+|---|---|---|
+| `JWT__KEY` · `JWT__ISSUER` | sim (API) | validação do JWT (mesma chave do users) |
+| `ConnectionStrings__DefaultConnection` | não (`Data Source=fcgames-payments.db`) | SQLite |
+| `Messaging__Provider` | não | `Sqs` = SQS/SNS (AWS); vazio + `RabbitMQ__Host` = RabbitMQ; nenhum = em memória |
+| `AWS__Region` | não | região do SQS/SNS |
+| `RabbitMQ__Host` · `RabbitMQ__Username` · `RabbitMQ__Password` | com RabbitMQ | broker local |
 
-## Variáveis de Ambiente
+Segredos não ficam no repositório: localmente vêm do `.env` do
+[`fcg-orchestration`](https://github.com/FIAP-POS-TECH-TEAM-10/fcg-orchestration); no EKS, do Secret `fcg-jwt`.
 
-| Variável | Descrição | Exemplo |
-|----------|-----------|---------|
-| `JWT__KEY` | Chave de assinatura JWT (mínimo 32 chars) | `<chave com 32+ caracteres>` |
-| `JWT__ISSUER` | Issuer validado no token | `AppFiapFcGames` |
-| `ConnectionStrings__DefaultConnection` | Connection string do banco | `Data Source=fcgames-payments.db` |
-| `RabbitMQ__Host` | Host do RabbitMQ (usado se `Messaging__Provider` não for `Sqs`) | `rabbitmq` |
-| `RabbitMQ__Username` | Usuário RabbitMQ | defina no ambiente (sem padrão) |
-| `RabbitMQ__Password` | Senha RabbitMQ | defina no ambiente (sem padrão) |
-| `Messaging__Provider` | `Sqs` usa Amazon SQS/SNS (deploy AWS). Vazio + `RabbitMQ__Host` → RabbitMQ. Nenhum dos dois → in-memory | `Sqs` |
-| `AWS__Region` | Região usada pelo transporte SQS/SNS quando `Messaging__Provider=Sqs` | `sa-east-1` |
+## Rodar local
 
-> **Segredos nunca devem estar no `appsettings.json` de produção.** Use env vars ou Kubernetes secrets.
-
-> **Rodando fora do docker-compose:** exporte `JWT__KEY`, `RABBITMQ__USERNAME` e `RABBITMQ__PASSWORD` (não há valores padrão no código nem nos `appsettings`; o compose do `fcg-orchestration` os injeta a partir do `.env`).
-
-> **Mensageria:** o transporte é escolhido em runtime (`AddMassTransitMessaging` na Api, mesmo padrão
-> inline no `Worker/Program.cs`) — o consumer, o retry policy e o código de aplicação não mudam entre
-> RabbitMQ e SQS. No ECS/AWS, o SDK usa a **Task Role** da task definition
-> (`fcg-payments-service-ecs-task-role`) pra autenticar no SQS/SNS — nenhuma credencial no código.
-
----
-
-## Rodando Localmente
-
-### Pré-requisitos
-
-- .NET 10 SDK
-- RabbitMQ rodando em `localhost:5672` (ou via Docker)
-- `NUGET_AUTH_TOKEN` com scope `read:packages` (para restaurar `FCGames.IntegrationEvents`)
-
-### 1. Configurar NUGET_AUTH_TOKEN
+Jeito recomendado: `docker compose up` no `fcg-orchestration`. Só este serviço (precisa de RabbitMQ
+ou das variáveis acima):
 
 ```bash
-# PowerShell
-$env:NUGET_AUTH_TOKEN = "ghp_..."
-
-# bash
-export NUGET_AUTH_TOKEN=ghp_...
+export NUGET_AUTH_TOKEN=$(gh auth token)   # pacote FCGames.IntegrationEvents (read:packages)
+dotnet run --project app/src/Fiap.FCGames.Payments.Api       # http://localhost:5003
+dotnet run --project app/src/Fiap.FCGames.Payments.Worker    # outro terminal
 ```
 
-### 2. Restaurar e rodar a API
+Imagens: `docker build --secret id=GITHUB_TOKEN,env=NUGET_AUTH_TOKEN -t fcg-payments-service .`
+(API) e `-f Dockerfile.worker` (worker).
 
-```bash
-cd app/src
-dotnet restore Fiap.FCGames.Payments.Api.slnx
-dotnet run --project Fiap.FCGames.Payments.Api
-# http://localhost:5003
-```
+## Na AWS
 
-### 3. Rodar o Worker (terminal separado)
+- Pod `payments-api` no EKS `fcg-eks` (namespace `fcgames`) com 2 containers: `api` e `worker`
+  (mesmo SQLite em disco efêmero). ALB em `/pagamentos`.
+- Imagens no ECR `fcg-payments-service` (`:<sha7>`/`:latest` e `:worker-<sha7>`/`:worker-latest`).
+- SQS/SNS pela role `fcg-eks-payments-api` (Pod Identity). Ainda não expõe `/metrics`.
+- Manifests: `fcg-orchestration/k8s/eks`.
 
-```bash
-cd app/src
-dotnet run --project Fiap.FCGames.Payments.Worker
-```
+## CI/CD
 
-### RabbitMQ via Docker (rápido)
+`.github/workflows/ci-cd.yml`: PR → build, testes, imagens e Trivy. Merge na `main` → também push no
+ECR e rolling update do pod; com o cluster desligado o deploy é pulado e as imagens entram no próximo
+"Ligar". Ainda não há projeto de testes.
 
-```bash
-docker run -d --name rabbitmq \
-  -p 5672:5672 -p 15672:15672 \
-  -e RABBITMQ_DEFAULT_USER="$RABBITMQ__USERNAME" -e RABBITMQ_DEFAULT_PASS="$RABBITMQ__PASSWORD" \
-  rabbitmq:3-management
-# Management UI: http://localhost:15672 (usuário e senha definidos em `RABBITMQ__USERNAME`/`RABBITMQ__PASSWORD`)
-```
-
----
-
-## Estrutura de Pastas
-
-```
-fcg-payments-api/
-├── nuget.config                          # feed GitHub Packages (FCGames.IntegrationEvents)
-├── app/src/
-│   ├── Fiap.FCGames.Payments.Api/
-│   │   ├── Controllers/PagamentosController.cs
-│   │   ├── Program.cs
-│   │   └── appsettings.Development.json
-│   ├── Fiap.FCGames.Payments.Worker/
-│   │   ├── Consumers/PedidoRealizadoEventoConsumer.cs
-│   │   ├── Program.cs
-│   │   └── appsettings.json
-│   ├── Fiap.FCGames.Payments.Application/
-│   │   └── Queries/BuscarPagamento/
-│   ├── Fiap.FCGames.Payments.Domain/
-│   │   └── Aggregates/AggregatePagamento/Pagamento.cs
-│   ├── Fiap.FCGames.Payments.Infra/
-│   │   ├── DataProvider/Contexto/FcGamesContexto.cs
-│   │   ├── DataProvider/Repositories/PagamentoRepository.cs
-│   │   └── Migrations/
-│   └── Fiap.FCGames.Payments.CrossCutting/
-│       └── Extensions/
-└── docs/
-```
-
----
-
-## Checklist de Entrega
-
-- [x] Domínio: `Pagamento` + `StatusPagamento`
-- [x] EF Core migration (`Pagamentos` com índice único em `PedidoId`)
-- [x] `GET /pagamentos/{orderId}` [Authorize]
-- [x] `GET /health`
-- [x] Consumer `PedidoRealizadoEvento` com regra determinística
-- [x] Publisher `PagamentoProcessadoEvento`
-- [x] Idempotência por `PedidoId`
-- [x] Retry 3x (5s / 10s / 30s)
-- [x] Fila: `payments-pedido-realizado`
-- [x] Projeto Worker separado
-- [x] `nuget.config` (GitHub Packages)
-- [ ] Dockerfile multi-stage (API + Worker)
-- [ ] Manifests Kubernetes (`/k8s/`)
-
-## Pipeline (CI/CD)
-
-`.github/workflows/ci-cd.yml` (GitHub Actions):
-
-| Gatilho | Jobs |
-|---|---|
-| Pull request → `main` | Build & testes → imagens Docker (API + worker) + **Trivy** (CRITICAL/HIGH, só reporta) |
-| Push na `main` / botão "Run workflow" na `main` | o mesmo + **push no ECR** (`:<sha7>`, `:latest`, `:worker-<sha7>`, `:worker-latest`) + **deploy no EKS** |
-
-- **Deploy:** `kubectl set image deploy/payments-api api=<ECR>:<sha7> worker=<ECR>:worker-<sha7>` + `kubectl rollout status` — API e worker ficam no mesmo pod (SQLite compartilhado); rolling update sem downtime.
-- **Cluster desligado** (o `fcg-eks` só fica ligado nas sessões): o deploy é pulado com aviso e o run fica verde; as imagens `:latest`/`:worker-latest` entram no próximo `./scripts/eks-up.sh`.
-- **Trivy:** tabela no resumo do run e alertas na aba **Security → Code scanning** (categorias `trivy-api` e `trivy-worker`).
-- **Testes:** `dotnet test` roda quando existir um projeto `*Tests.csproj`; hoje o pipeline emite um aviso (pendência — a regra de aprovação é a candidata natural ao primeiro teste).
-- **Autenticação:** OIDC com a role `GitHubActions-ECS-Deploy-Role` (sem chave AWS no GitHub). Secret necessário: `PAT_PACKAGES` (`read:packages`).
+Para Kind/Docker Desktop local, ver [`k8s/README.md`](k8s/README.md).

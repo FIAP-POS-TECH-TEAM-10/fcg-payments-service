@@ -1,64 +1,9 @@
-# Payments API - Kubernetes Deployment
+# payments em Kubernetes local (Kind / Docker Desktop)
 
-Este diretório contém os manifestos Kubernetes para deploy do microsserviço Payments API e seu Worker.
+Manifests só para cluster local (API e worker em deployments separados, volume compartilhado).
+Na AWS o deploy usa `fcg-orchestration/k8s/eks` (API e worker no mesmo pod).
 
-## Recursos
-
-- **Deployment API**: Define os Pods da API
-- **Deployment Worker**: Define os Pods do Worker (consumer)
-- **Service**: Expõe a API dentro do cluster
-- **ConfigMap**: Configurações não sensíveis
-- **Secret**: Credenciais e dados sensíveis
-- **PersistentVolumeClaim**: Volume compartilhado entre API e Worker (ReadWriteMany)
-
-## Deploy
-
-### 1. Build das Imagens Docker
-
-```bash
-# API
-docker build -t fcg-payments-api:latest -f Dockerfile .
-
-# Worker
-docker build -t fcg-payments-worker:latest -f Dockerfile.worker .
-```
-
-### 2. Aplicar Manifestos
-
-> **Atenção:** crie o Secret (seção abaixo) **antes** de aplicar e não use `kubectl apply -f k8s/` na pasta inteira: isso aplicaria o `secret.yaml` modelo (valores `REPLACE_ME`) por cima do Secret real.
-
-```bash
-kubectl apply -f k8s/configmap.yaml -f k8s/deployment-api.yaml -f k8s/deployment-worker.yaml -f k8s/pvc.yaml -f k8s/service.yaml
-```
-
-### 3. Verificar Status
-
-```bash
-# API
-kubectl get pods -n fcgames -l app=payments-api
-kubectl logs -n fcgames -l app=payments-api -f
-
-# Worker
-kubectl get pods -n fcgames -l app=payments-worker
-kubectl logs -n fcgames -l app=payments-worker -f
-```
-
-## Configurações
-
-### ConfigMap (configmap.yaml)
-- `jwt-issuer`: Issuer do token JWT
-- `rabbitmq-host`: Host do RabbitMQ
-- `aspnetcore-urls`: URLs que a API escuta
-
-### Secret (secret.yaml)
-- `jwt-key`: Chave secreta para assinar tokens JWT
-- `db-connection`: String de conexão do banco de dados
-- `rabbitmq-username`: Usuário do RabbitMQ
-- `rabbitmq-password`: Senha do RabbitMQ
-
-**IMPORTANTE**: Altere os valores dos Secrets em produção!
-
-O `secret.yaml` versionado é só um **modelo** (valores `REPLACE_ME`). Crie o Secret real com as suas credenciais:
+1. Crie o Secret real (o `secret.yaml` daqui é só modelo, com `REPLACE_ME`):
 
 ```bash
 kubectl create secret generic payments-api-secret -n fcgames \
@@ -68,34 +13,17 @@ kubectl create secret generic payments-api-secret -n fcgames \
   --from-literal=rabbitmq-password="$RABBITMQ__PASSWORD"
 ```
 
-## Acesso
-
-### Port Forward para acesso local
+2. Aplique os demais manifests (não use `kubectl apply -f k8s/`: aplicaria o modelo por cima do Secret):
 
 ```bash
-kubectl port-forward -n fcgames svc/payments-api 5003:80
+kubectl apply -f k8s/configmap.yaml -f k8s/deployment-api.yaml -f k8s/deployment-worker.yaml -f k8s/pvc.yaml -f k8s/service.yaml
 ```
 
-Acesse: http://localhost:5003
+3. Teste:
 
-## Endpoints
+```bash
+kubectl get pods -n fcgames -l 'app in (payments-api,payments-worker)'
+kubectl port-forward -n fcgames svc/payments-api 5003:80    # http://localhost:5003/health
+```
 
-- `GET /api/pagamentos` - Listar pagamentos
-- `GET /api/pagamentos/{id}` - Buscar pagamento por ID
-- `GET /health` - Health check
-
-## Dependências
-
-- RabbitMQ (deve estar rodando no namespace fcgames)
-
-## Eventos Consumidos (Worker)
-
-- **OrderPlacedEvent**: Consumido para processar pagamento
-
-## Eventos Publicados (Worker)
-
-- **PaymentProcessedEvent**: Publicado após processar pagamento (Approved/Rejected)
-
-## Nota sobre o Volume
-
-O PVC usa `ReadWriteMany` para permitir que API e Worker compartilhem o mesmo banco SQLite. Em produção, considere usar um banco de dados externo.
+Precisa do RabbitMQ no namespace `fcgames` (manifests em `fcg-orchestration/k8s`).
