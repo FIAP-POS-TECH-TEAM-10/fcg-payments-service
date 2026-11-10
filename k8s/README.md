@@ -3,6 +3,14 @@
 Manifests só para cluster local (API e worker em deployments separados, volume compartilhado).
 Na AWS o deploy usa `fcg-orchestration/k8s/eks` (API e worker no mesmo pod).
 
+0. Gere as imagens com as tags que os deployments esperam (no Kind, carregue no cluster):
+
+```bash
+docker build --secret id=GITHUB_TOKEN,env=NUGET_AUTH_TOKEN -t fcg-payments-api:latest .
+docker build --secret id=GITHUB_TOKEN,env=NUGET_AUTH_TOKEN -t fcg-payments-worker:latest -f Dockerfile.worker .
+kind load docker-image fcg-payments-api:latest fcg-payments-worker:latest    # só no Kind
+```
+
 1. Crie o Secret real (o `secret.yaml` daqui é só modelo, com `REPLACE_ME`):
 
 ```bash
