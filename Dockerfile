@@ -19,11 +19,10 @@ RUN --mount=type=secret,id=GITHUB_TOKEN \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# Instala bibliotecas nativas de internacionalizacao e suporte a timezone
+# curl: HEALTHCHECK do compose. ICU e tzdata ja vem na imagem aspnet (libicu74, tzdata);
+# nao instalar libicu-dev/icu-devtools: arrastam o linux-libc-dev, que gera centenas de alertas no Trivy.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    icu-devtools \
-    libicu-dev \
     && rm -rf /var/lib/apt/lists/*    
 
 EXPOSE 5003
